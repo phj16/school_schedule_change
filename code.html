@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>판교고 수업 교환</title>
+
+<style>
+body {
+    margin: 0;
+    font-family: 'Courier New', monospace;
+    background: #2e5e3e;
+    color: #ffffff;
+    text-align: center;
+
+    text-shadow: 
+        -1px -1px 0 #000,
+         1px -1px 0 #000,
+        -1px  1px 0 #000,
+         1px  1px 0 #000;
+}
+
+h1 {
+    padding: 20px;
+    font-size: 40px;
+    border-bottom: 3px dashed #ffffff;
+}
+
+input {
+    padding: 12px;
+    font-size: 20px;
+    margin-top: 10px;
+}
+
+.container {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 15px;
+    padding: 20px;
+}
+
+.box {
+    background: rgba(0,0,0,0.3);
+    padding: 15px;
+    border: 2px dashed #ffffff;
+}
+
+h2 {
+    font-size: 26px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+td, th {
+    border: 2px dashed #ffffff;
+    padding: 10px;
+    font-size: 16px;
+}
+
+.changed {
+    background: rgba(255,255,255,0.3);
+    font-weight: bold;
+}
+
+.big {
+    font-size: 80px;
+    margin-top: 200px;
+    font-weight: bold;
+}
+</style>
+</head>
+
+<body>
+
+<h1>📚 판교고 수업 교환</h1>
+<input type="date" id="dateInput">
+<div id="notice"></div>
+
+<div class="container" id="main">
+<div class="box">
+<h2>1학년</h2>
+<table id="grade1"><tr><th>반</th><th>교시</th><th>과목</th></tr></table>
+</div>
+<div class="box">
+<h2>2학년</h2>
+<table id="grade2"><tr><th>반</th><th>교시</th><th>과목</th></tr></table>
+</div>
+<div class="box">
+<h2>3학년</h2>
+<table id="grade3"><tr><th>반</th><th>교시</th><th>과목</th></tr></table>
+</div>
+</div>
+
+<script>
+const KEY = "2ae0eaa6b1b74282b88a661eec405c9a";
+const ATPT = "J10";
+const SCHOOL = "7531255";
+
+const GRADES = [1,2,3];
+const CLASSES = [1,2,3,4,5,6,7,8];
+
+const HOLIDAYS = [
+    "설날","추석","광복절","개천절",
+    "한글날","삼일절","어린이날",
+    "현충일","성탄절","부처님오신날",
+    "제헌절","노동절","대체공휴일"
+];
+
+function format(d) {
+    return d.toISOString().slice(0,10);
+}
+
+const today = new Date();
+const nextWeek = new Date();
+nextWeek.setDate(today.getDate() + 7);
+
+const input = document.getElementById("dateInput");
+input.min = format(today);
+input.max = format(nextWeek);
+
+let lastValidDate;
+
+function getValidDate(d) {
+    if (d.getDay() === 6) d.setDate(d.getDate() + 2);
+    if (d.getDay() === 0) d.setDate(d.getDate() + 1);
+    return d;
+}
+
+let initDate = getValidDate(new Date());
+input.value = format(initDate);
+lastValidDate = input.value;
+
+function toAPI(dateStr) {
+    return dateStr.replaceAll("-", "");
+}
+
+function getMode(arr) {
+    const count = {};
+    arr.forEach(v => count[v] = (count[v] || 0) + 1);
+    return Object.keys(count).reduce((a,b) => count[a] > count[b] ? a : b);
+}
+
+async function fetchData(date, grade, classNum) {
+    const url = `https://open.neis.go.kr/hub/hisTimetable?KEY=${KEY}&Type=json&ATPT_OFCDC_SC_CODE=${ATPT}&SD_SCHUL_CODE=${SCHOOL}&GRADE=${grade}&CLASS_NM=${classNum}&ALL_TI_YMD=${date}`;
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (!data.hisTimetable) return [];
+        return data.hisTimetable[1].row.map(r => ({
+            grade, classNum,
+            period: r.PERIO,
+            subject: r.ITRT_CNTNT
+        }));
+    } catch { return []; }
+}
+
+async function getAll(date) {
+    const promises = [];
+    for (let g of GRADES)
+        for (let c of CLASSES)
+            promises.push(fetchData(date,g,c));
+    return (await Promise.all(promises)).flat();
+}
+
+async function getHistory(base) {
+    const promises = [];
+    for (let w=1; w<=8; w++) {
+        const d = new Date(base);
+        d.setDate(d.getDate()-7*w);
+        promises.push(getAll(format(d).replaceAll("-","")));
+    }
+    return (await Promise.all(promises)).flat();
+}
+
+function isExam(data){
+    return data.some(d =>
+        d.subject.includes("1차정기시험") ||
+        d.subject.includes("2차정기시험")
+    );
+}
+
+function isHolidayBySubject(data){
+    return data.some(d =>
+        HOLIDAYS.some(h => d.subject.includes(h))
+    );
+}
+
+function reset(){
+    [1,2,3].forEach(g=>{
+        document.getElementById(`grade${g}`).innerHTML =
+        `<tr><th>반</th><th>교시</th><th>과목</th></tr>`;
+    });
+    document.getElementById("notice").innerHTML="";
+    document.getElementById("main").style.display="grid";
+}
+
+function analyze(today,history){
+    const day = new Date(input.value).getDay();
+
+    today.forEach(t=>{
+        if(day===3 && (t.period==5||t.period==6)) return;
+
+        const past = history.filter(h =>
+            h.grade===t.grade &&
+            h.classNum===t.classNum &&
+            h.period===t.period
+        );
+
+        if(!past.length) return;
+
+        const mode = getMode(past.map(p=>p.subject));
+
+        if(mode!==t.subject){
+            document.getElementById(`grade${t.grade}`).innerHTML += `
+            <tr class="changed">
+                <td>${t.classNum}</td>
+                <td>${t.period}</td>
+                <td>${t.subject}</td>
+            </tr>`;
+        }
+    });
+}
+
+async function run(){
+
+    reset();
+
+    const selected = input.value;
+    const dateObj = new Date(selected);
+
+    const todayData = await getAll(toAPI(selected));
+
+    if(!todayData.length){
+        alert("공휴일에는 학교 오지 마세요!");
+        input.value = lastValidDate;
+        run(); // 🔥 추가
+        return;
+    }
+
+    if(isExam(todayData)){
+        document.getElementById("notice").innerHTML =
+        "<div class='big'>시험기간</div>";
+        document.getElementById("main").style.display="none";
+        return;
+    }
+
+    if(isHolidayBySubject(todayData)){
+        alert("공휴일에는 학교 오지 마세요!");
+        input.value = lastValidDate;
+        run(); // 🔥 추가
+        return;
+    }
+
+    lastValidDate = selected;
+
+    const history = await getHistory(dateObj);
+    analyze(todayData,history);
+}
+
+input.addEventListener("change",()=>{
+    const d=new Date(input.value).getDay();
+    if(d===0||d===6){
+        alert("주말에는 집에서 쉬세요!");
+        input.value = lastValidDate;
+        run(); // 🔥 추가
+        return;
+    }
+    run();
+});
+
+window.onload=run;
+</script>
+
+</body>
+</html>
